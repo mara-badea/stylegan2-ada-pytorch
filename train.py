@@ -70,6 +70,8 @@ def setup_training_loop_kwargs(
     allow_tf32 = None, # Allow PyTorch to use TF32 for matmul and convolutions: <bool>, default = False
     nobench    = None, # Disable cuDNN benchmarking: <bool>, default = False
     workers    = None, # Override number of DataLoader workers: <int>, default = 3
+    wandb      = None,
+    wandb_enabled = None
 ):
     args = dnnlib.EasyDict()
 
@@ -362,7 +364,7 @@ def setup_training_loop_kwargs(
             raise UserError('--workers must be at least 1')
         args.data_loader_kwargs.num_workers = workers
 
-    args.wandb = wandb
+    args.wandb = bool(wandb and wandb_enabled)
 
     return desc, args
 
