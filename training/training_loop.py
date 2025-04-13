@@ -24,6 +24,12 @@ from torch_utils.ops import grid_sample_gradfix
 import legacy
 from metrics import metric_main
 
+try:
+    import wandb
+
+except ImportError:
+    wandb = None
+
 #----------------------------------------------------------------------------
 
 def setup_snapshot_image_grid(training_set, random_seed=0):
@@ -118,6 +124,7 @@ def training_loop(
     allow_tf32              = False,    # Enable torch.backends.cuda.matmul.allow_tf32 and torch.backends.cudnn.allow_tf32?
     abort_fn                = None,     # Callback function for determining whether to abort training. Must return consistent results across ranks.
     progress_fn             = None,     # Callback function for updating training progress. Called for all ranks.
+    wandb_enabled = False,
 ):
     # Initialize.
     start_time = time.time()
@@ -348,6 +355,13 @@ def training_loop(
         if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
             images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
             save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
+        if wandb and wandb_enabled:
+            wandb.log({
+                "Image Samples": wandb.Image(
+                    os.path.join(run_dir, f'fakes{cur_nimg // 1000:06d}.png'),
+                    caption=f"Step {cur_nimg // 1000}k"
+                )
+            }, step=cur_nimg // 1000)
 
         # Save network snapshot.
         snapshot_pkl = None
@@ -365,6 +379,9 @@ def training_loop(
             if rank == 0:
                 with open(snapshot_pkl, 'wb') as f:
                     pickle.dump(snapshot_data, f)
+                if wandb and wandb_enabled:
+                    wandb.save(snapshot_pkl)
+                    wandb.log({"model_checkpoint": wandb.Artifact(snapshot_pkl, type="model")}, step=cur_nimg // 1000)
 
         # Evaluate metrics.
         if (snapshot_data is not None) and (len(metrics) > 0):
@@ -404,6 +421,10 @@ def training_loop(
             stats_tfevents.flush()
         if progress_fn is not None:
             progress_fn(cur_nimg // 1000, total_kimg)
+        if wandb and wandb_enabled:
+            wandb_metrics = {f"stylegan2-ada/{name}": value.mean for name, value in stats_dict.items()}
+            wandb_metrics.update({f"stylegan2-ada/Metrics/{name}": value for name, value in stats_metrics.items()})
+            wandb.log(wandb_metrics, step=global_step)
 
         # Update state.
         cur_tick += 1

@@ -22,6 +22,12 @@ from metrics import metric_main
 from torch_utils import training_stats
 from torch_utils import custom_ops
 
+try:
+    import wandb
+
+except ImportError:
+    wandb = None
+
 #----------------------------------------------------------------------------
 
 class UserError(Exception):
@@ -356,6 +362,8 @@ def setup_training_loop_kwargs(
             raise UserError('--workers must be at least 1')
         args.data_loader_kwargs.num_workers = workers
 
+    args.wandb = wandb
+
     return desc, args
 
 #----------------------------------------------------------------------------
@@ -380,7 +388,7 @@ def subprocess_fn(rank, args, temp_dir):
         custom_ops.verbosity = 'none'
 
     # Execute training loop.
-    training_loop.training_loop(rank=rank, **args)
+    training_loop.training_loop(rank=rank, wandb_enabled=args.wandb, **args)
 
 #----------------------------------------------------------------------------
 
@@ -434,6 +442,8 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--nobench', help='Disable cuDNN benchmarking', type=bool, metavar='BOOL')
 @click.option('--allow-tf32', help='Allow PyTorch to use TF32 internally', type=bool, metavar='BOOL')
 @click.option('--workers', help='Override number of DataLoader workers', type=int, metavar='INT')
+
+@click.option('--wandb', is_flag=True, help='Enable Weights & Biases logging')
 
 def main(ctx, outdir, dry_run, **config_kwargs):
     """Train a GAN using the techniques described in the paper
@@ -516,6 +526,15 @@ def main(ctx, outdir, dry_run, **config_kwargs):
     if dry_run:
         print('Dry run; exiting.')
         return
+
+    if wandb is not None and config_kwargs.get("wandb", False):
+        wandb.init(
+            project="stylegan2ada-medical",
+            name=f"{run_desc}",
+            config=args,
+            dir=outdir,
+            resume="allow"
+        )
 
     # Create output directory.
     print('Creating output directory...')
