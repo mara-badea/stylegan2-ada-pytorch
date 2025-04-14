@@ -15,6 +15,7 @@ import psutil
 import PIL.Image
 import numpy as np
 import torch
+import wandb
 import dnnlib
 from torch_utils import misc
 from torch_utils import training_stats
@@ -23,12 +24,6 @@ from torch_utils.ops import grid_sample_gradfix
 
 import legacy
 from metrics import metric_main
-
-try:
-    import wandb
-
-except ImportError:
-    wandb = None
 
 #----------------------------------------------------------------------------
 
@@ -93,6 +88,7 @@ def save_image_grid(img, fname, drange, grid_size):
 
 def training_loop(
     run_dir                 = '.',      # Output directory.
+    wandb_run               = None,     # wandb Run object.
     training_set_kwargs     = {},       # Options for training set.
     data_loader_kwargs      = {},       # Options for torch.utils.data.DataLoader.
     G_kwargs                = {},       # Options for generator network.
@@ -124,11 +120,8 @@ def training_loop(
     allow_tf32              = False,    # Enable torch.backends.cuda.matmul.allow_tf32 and torch.backends.cudnn.allow_tf32?
     abort_fn                = None,     # Callback function for determining whether to abort training. Must return consistent results across ranks.
     progress_fn             = None,     # Callback function for updating training progress. Called for all ranks.
-    **kwargs
 ):
     # Initialize.
-    wandb_enabled = kwargs.get("wandb", False)
-
     start_time = time.time()
     device = torch.device('cuda', rank)
     np.random.seed(random_seed * num_gpus + rank)
@@ -231,9 +224,11 @@ def training_loop(
         grid_size, images, labels = setup_snapshot_image_grid(training_set=training_set)
         save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
         grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
+        wandb_run.log({'real': wandb.Image(os.path.join(run_dir, 'reals.png'))})
         grid_c = torch.from_numpy(labels).to(device).split(batch_gpu)
         images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
         save_image_grid(images, os.path.join(run_dir, 'fakes_init.png'), drange=[-1,1], grid_size=grid_size)
+        wandb_run.log({'fakes_init': wandb.Image(os.path.join(run_dir, 'fakes_init.png'))})
 
     # Initialize logs.
     if rank == 0:
@@ -357,13 +352,7 @@ def training_loop(
         if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
             images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
             save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
-        if wandb and wandb_enabled:
-            wandb.log({
-                "Image Samples": wandb.Image(
-                    os.path.join(run_dir, f'fakes{cur_nimg // 1000:06d}.png'),
-                    caption=f"Step {cur_nimg // 1000}k"
-                )
-            }, step=cur_nimg // 1000)
+            wandb_run.log({'fakes': wandb.Image(os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'))}, step=cur_nimg)
 
         # Save network snapshot.
         snapshot_pkl = None
@@ -381,9 +370,10 @@ def training_loop(
             if rank == 0:
                 with open(snapshot_pkl, 'wb') as f:
                     pickle.dump(snapshot_data, f)
-                if wandb and wandb_enabled:
-                    wandb.save(snapshot_pkl)
-                    wandb.log({"model_checkpoint": wandb.Artifact(snapshot_pkl, type="model")}, step=cur_nimg // 1000)
+                wandb_run.save(snapshot_pkl)
+                artifact = wandb.Artifact(name='network-snapshot', type='model')
+                artifact.add_file(snapshot_pkl)
+                wandb_run.log_artifact(artifact)
 
         # Evaluate metrics.
         if (snapshot_data is not None) and (len(metrics) > 0):
@@ -397,6 +387,8 @@ def training_loop(
                 stats_metrics.update(result_dict.results)
         del snapshot_data # conserve memory
 
+        if rank == 0: wandb_run.log(stats_metrics, step=cur_nimg)
+
         # Collect statistics.
         for phase in phases:
             value = []
@@ -406,6 +398,7 @@ def training_loop(
             training_stats.report0('Timing/' + phase.name, value)
         stats_collector.update()
         stats_dict = stats_collector.as_dict()
+        if rank == 0: wandb_run.log(stats_dict, step=cur_nimg)
 
         # Update logs.
         timestamp = time.time()
@@ -423,10 +416,6 @@ def training_loop(
             stats_tfevents.flush()
         if progress_fn is not None:
             progress_fn(cur_nimg // 1000, total_kimg)
-        if wandb and wandb_enabled:
-            wandb_metrics = {f"stylegan2-ada/{name}": value.mean for name, value in stats_dict.items()}
-            wandb_metrics.update({f"stylegan2-ada/Metrics/{name}": value for name, value in stats_metrics.items()})
-            wandb.log(wandb_metrics, step=global_step)
 
         # Update state.
         cur_tick += 1

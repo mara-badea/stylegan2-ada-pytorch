@@ -22,11 +22,7 @@ from metrics import metric_main
 from torch_utils import training_stats
 from torch_utils import custom_ops
 
-try:
-    import wandb
-
-except ImportError:
-    wandb = None
+import wandb
 
 #----------------------------------------------------------------------------
 
@@ -70,8 +66,6 @@ def setup_training_loop_kwargs(
     allow_tf32 = None, # Allow PyTorch to use TF32 for matmul and convolutions: <bool>, default = False
     nobench    = None, # Disable cuDNN benchmarking: <bool>, default = False
     workers    = None, # Override number of DataLoader workers: <int>, default = 3
-    wandb      = None,
-    wandb_enabled = None
 ):
     args = dnnlib.EasyDict()
 
@@ -277,6 +271,9 @@ def setup_training_loop_kwargs(
         desc += f'-{augpipe}'
 
     augpipe_specs = {
+        'brain-mri': dict(xflip=1, rotate90=1, scale=1),
+        'lung-xray': dict(xint=1, scale=1, brightness=1, contrast=1),
+        'breast-ct': dict(xint=1, scale=1),
         'blit':   dict(xflip=1, rotate90=1, xint=1),
         'geom':   dict(scale=1, rotate=1, aniso=1, xfrac=1),
         'color':  dict(brightness=1, contrast=1, lumaflip=1, hue=1, saturation=1),
@@ -364,8 +361,6 @@ def setup_training_loop_kwargs(
             raise UserError('--workers must be at least 1')
         args.data_loader_kwargs.num_workers = workers
 
-    args.wandb = bool(wandb and wandb_enabled)
-
     return desc, args
 
 #----------------------------------------------------------------------------
@@ -389,8 +384,16 @@ def subprocess_fn(rank, args, temp_dir):
     if rank != 0:
         custom_ops.verbosity = 'none'
 
-    # Execute training loop.
-    training_loop.training_loop(rank=rank, **args)
+    if rank == 0:
+        # wandb
+        wandb_run = wandb.init(project="stylegan2-ada-medical-img")
+        wandb.config.update(args)
+        # Execute training loop.
+        training_loop.training_loop(rank=rank, wandb_run=wandb_run, **args)
+    else:
+        # Execute training loop.
+        training_loop.training_loop(rank=rank, **args)
+
 
 #----------------------------------------------------------------------------
 
@@ -432,7 +435,7 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--aug', help='Augmentation mode [default: ada]', type=click.Choice(['noaug', 'ada', 'fixed']))
 @click.option('--p', help='Augmentation probability for --aug=fixed', type=float)
 @click.option('--target', help='ADA target value for --aug=ada', type=float)
-@click.option('--augpipe', help='Augmentation pipeline [default: bgc]', type=click.Choice(['blit', 'geom', 'color', 'filter', 'noise', 'cutout', 'bg', 'bgc', 'bgcf', 'bgcfn', 'bgcfnc']))
+@click.option('--augpipe', help='Augmentation pipeline [default: bgc]', type=click.Choice(['brain-mri', 'lung-xray', 'breast-ct', 'blit', 'geom', 'color', 'filter', 'noise', 'cutout', 'bg', 'bgc', 'bgcf', 'bgcfn', 'bgcfnc']))
 
 # Transfer learning.
 @click.option('--resume', help='Resume training [default: noresume]', metavar='PKL')
@@ -444,8 +447,6 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--nobench', help='Disable cuDNN benchmarking', type=bool, metavar='BOOL')
 @click.option('--allow-tf32', help='Allow PyTorch to use TF32 internally', type=bool, metavar='BOOL')
 @click.option('--workers', help='Override number of DataLoader workers', type=int, metavar='INT')
-
-@click.option('--wandb', is_flag=True, help='Enable Weights & Biases logging')
 
 def main(ctx, outdir, dry_run, **config_kwargs):
     """Train a GAN using the techniques described in the paper
@@ -528,15 +529,6 @@ def main(ctx, outdir, dry_run, **config_kwargs):
     if dry_run:
         print('Dry run; exiting.')
         return
-
-    if wandb is not None and config_kwargs.get("wandb", False):
-        wandb.init(
-            project="stylegan2ada-medical",
-            name=f"{run_desc}",
-            config=args,
-            dir=outdir,
-            resume="allow"
-        )
 
     # Create output directory.
     print('Creating output directory...')
