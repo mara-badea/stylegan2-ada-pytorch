@@ -386,7 +386,7 @@ def subprocess_fn(rank, args, temp_dir):
 
     if rank == 0:
         # wandb
-        wandb_run = wandb.init(project="stylegan2-ada-medical-img")
+        wandb_run = wandb.init(project="stylegan2-ada-brain-cond")
         wandb.config.update(args)
         # Execute training loop.
         training_loop.training_loop(rank=rank, wandb_run=wandb_run, **args)
