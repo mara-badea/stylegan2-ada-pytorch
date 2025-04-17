@@ -271,6 +271,8 @@ def setup_training_loop_kwargs(
         desc += f'-{augpipe}'
 
     augpipe_specs = {
+        'brain-mri-extra-aug': dict(xflip=1, scale=1, xint=1, brightness=0.5,
+                                    contrast=0.5, cutout=1, noise=1),
         'brain-mri': dict(xflip=1, rotate90=1, scale=1),
         'lung-xray': dict(xint=1, scale=1, brightness=1, contrast=1),
         'breast-ct': dict(xint=1, scale=1),
