@@ -271,8 +271,20 @@ def setup_training_loop_kwargs(
         desc += f'-{augpipe}'
 
     augpipe_specs = {
-        'brain-mri-extra-aug': dict(xflip=1, scale=1, xint=1, brightness=0.5,
-                                    contrast=0.5, cutout=1, noise=1),
+        'chest-xray-aug-v2': dict(
+            xint=1.0,
+            xint_max=0.02,
+
+            scale=0.1,
+            rotate=0.1,
+            rotate_max=0.01,
+
+            brightness=0.1,
+            contrast=0.1,
+
+            cutout=0.05,
+            cutout_size=0.05
+        ),
         'brain-mri': dict(xflip=1, rotate90=1, scale=1),
         'lung-xray': dict(xint=1, scale=1, brightness=1, contrast=1),
         'breast-ct': dict(xint=1, scale=1),
@@ -388,7 +400,7 @@ def subprocess_fn(rank, args, temp_dir):
 
     if rank == 0:
         # wandb
-        wandb_run = wandb.init(project="stylegan2-ada-brain-cond")
+        wandb_run = wandb.init(project="stylegan2-ada-chest-cond")
         wandb.config.update(args)
         # Execute training loop.
         training_loop.training_loop(rank=rank, wandb_run=wandb_run, **args)
@@ -437,7 +449,7 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--aug', help='Augmentation mode [default: ada]', type=click.Choice(['noaug', 'ada', 'fixed']))
 @click.option('--p', help='Augmentation probability for --aug=fixed', type=float)
 @click.option('--target', help='ADA target value for --aug=ada', type=float)
-@click.option('--augpipe', help='Augmentation pipeline [default: bgc]', type=click.Choice(['brain-mri', 'lung-xray', 'breast-ct', 'blit', 'geom', 'color', 'filter', 'noise', 'cutout', 'bg', 'bgc', 'bgcf', 'bgcfn', 'bgcfnc']))
+@click.option('--augpipe', help='Augmentation pipeline [default: bgc]', type=click.Choice(['brain-mri-aug-v2', 'brain-mri', 'lung-xray', 'breast-ct', 'blit', 'geom', 'color', 'filter', 'noise', 'cutout', 'bg', 'bgc', 'bgcf', 'bgcfn', 'bgcfnc']))
 
 # Transfer learning.
 @click.option('--resume', help='Resume training [default: noresume]', metavar='PKL')
